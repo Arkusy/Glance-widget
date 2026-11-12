@@ -433,11 +433,7 @@ private fun ComicFileRowItem(item: FileBrowserItem) {
                     modifier = GlanceModifier.size(18.dp)
                 )
             } else {
-                val badgeText = if (item.isImage) {
-                    "VIEW IMG"
-                } else {
-                    FileHelper.getFileFormatBadge(File(item.absolutePath))
-                }
+                val badgeText = FileHelper.getFileFormatBadge(File(item.absolutePath))
                 Box(
                     modifier = GlanceModifier
                         .background(ComicBlackProvider)

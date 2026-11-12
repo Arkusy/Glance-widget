@@ -24,8 +24,12 @@ import androidx.annotation.DrawableRes
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.core.content.res.ResourcesCompat
+import androidx.core.graphics.PathParser
+import org.xmlpull.v1.XmlPullParser
+import org.xmlpull.v1.XmlPullParserFactory
 import java.io.File
 import java.io.FileOutputStream
+import java.io.StringReader
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -134,7 +138,7 @@ object FileHelper {
     private const val MAX_GLANCE_MARKDOWN_BLOCKS = 140
 
     private val SUPPORTED_IMAGE_EXTENSIONS = setOf(
-        "jpg", "jpeg", "png", "webp", "bmp"
+        "jpg", "jpeg", "png", "webp", "bmp", "svg", "gif"
     )
 
     private val MARKDOWN_EXTENSIONS = setOf(
@@ -146,7 +150,7 @@ object FileHelper {
         "java", "kt", "kts", "c", "cpp", "cc", "cxx", "h", "hpp", "hxx",
         "cs", "py", "rb", "go", "rs", "swift", "dart", "php", "lua", "pl", "r",
         "js", "jsx", "mjs", "cjs", "ts", "tsx",
-        "html", "htm", "css", "scss", "sass", "less", "xml", "svg",
+        "html", "htm", "css", "scss", "sass", "less", "xml",
         "json", "jsonl", "yaml", "yml", "toml", "ini", "cfg", "conf", "properties",
         "gradle", "pro", "mk", "cmake",
         "sh", "bash", "zsh", "fish", "bat", "cmd", "ps1",
@@ -571,6 +575,10 @@ object FileHelper {
         val file = File(filePath)
         if (!file.exists() || !file.isFile || file.length() == 0L) return null
 
+        if (file.extension.equals("svg", ignoreCase = true)) {
+            return decodeSvgToBitmap(file, maxDimension)
+        }
+
         return try {
             val boundsOptions = BitmapFactory.Options().apply {
                 inJustDecodeBounds = true
@@ -703,6 +711,293 @@ object FileHelper {
             }
         }
         return inSampleSize.coerceAtLeast(1)
+    }
+
+    /**
+     * Parses and renders an `.svg` vector file into a crisp [Bitmap] up to [maxDimension] using
+     * [XmlPullParser] and [PathParser].
+     */
+    private fun decodeSvgToBitmap(file: File, maxDimension: Int): Bitmap? {
+        return try {
+            val svgText = file.readText(Charsets.UTF_8)
+            val factory = XmlPullParserFactory.newInstance().apply { isNamespaceAware = false }
+            val parser = factory.newPullParser()
+            parser.setInput(StringReader(svgText))
+
+            var viewMinX = 0f
+            var viewMinY = 0f
+            var viewWidth = 0f
+            var viewHeight = 0f
+            var explicitW = 0f
+            var explicitH = 0f
+
+            data class SvgStyle(
+                val fill: String? = null,
+                val stroke: String? = null,
+                val strokeWidth: Float? = null
+            )
+
+            val styleStack = ArrayDeque<SvgStyle>()
+            styleStack.addLast(SvgStyle(fill = "#000000", stroke = null, strokeWidth = 1f))
+
+            fun parseDimen(raw: String?): Float? {
+                if (raw.isNullOrBlank()) return null
+                val cleaned = raw.trim()
+                    .removeSuffix("px")
+                    .removeSuffix("pt")
+                    .removeSuffix("dp")
+                    .removeSuffix("%")
+                    .trim()
+                return cleaned.toFloatOrNull()
+            }
+
+            fun parseStyleMap(styleAttr: String?): Map<String, String> {
+                if (styleAttr.isNullOrBlank()) return emptyMap()
+                return styleAttr.split(';')
+                    .mapNotNull { entry ->
+                        val idx = entry.indexOf(':')
+                        if (idx > 0) {
+                            entry.substring(0, idx).trim().lowercase(Locale.ROOT) to
+                                entry.substring(idx + 1).trim()
+                        } else {
+                            null
+                        }
+                    }
+                    .toMap()
+            }
+
+            fun parseSvgColor(raw: String?): Int? {
+                if (raw.isNullOrBlank()) return null
+                val c = raw.trim().lowercase(Locale.ROOT)
+                if (c == "none" || c == "transparent") return null
+                if (c == "currentcolor") return Color.BLACK
+                if (c.startsWith("#")) {
+                    val hex = c.removePrefix("#")
+                    val expanded = if (hex.length == 3) {
+                        "${hex[0]}${hex[0]}${hex[1]}${hex[1]}${hex[2]}${hex[2]}"
+                    } else {
+                        hex
+                    }
+                    return runCatching { Color.parseColor("#$expanded") }.getOrNull()
+                }
+                if (c.startsWith("rgb(") && c.endsWith(")")) {
+                    val parts = c.removePrefix("rgb(").removeSuffix(")").split(',')
+                        .mapNotNull { it.trim().toIntOrNull() }
+                    if (parts.size == 3) {
+                        return Color.rgb(
+                            parts[0].coerceIn(0, 255),
+                            parts[1].coerceIn(0, 255),
+                            parts[2].coerceIn(0, 255)
+                        )
+                    }
+                }
+                return runCatching { Color.parseColor(c) }.getOrNull() ?: Color.BLACK
+            }
+
+            // First pass to determine SVG viewport dimensions
+            var ev = parser.eventType
+            while (ev != XmlPullParser.END_DOCUMENT) {
+                if (ev == XmlPullParser.START_TAG && parser.name.equals("svg", ignoreCase = true)) {
+                    explicitW = parseDimen(parser.getAttributeValue(null, "width")) ?: 0f
+                    explicitH = parseDimen(parser.getAttributeValue(null, "height")) ?: 0f
+                    val vb = parser.getAttributeValue(null, "viewBox")
+                        ?: parser.getAttributeValue(null, "viewbox")
+                    if (!vb.isNullOrBlank()) {
+                        val nums = vb.trim().split(Regex("[\\s,]+")).mapNotNull { it.toFloatOrNull() }
+                        if (nums.size == 4) {
+                            viewMinX = nums[0]
+                            viewMinY = nums[1]
+                            viewWidth = nums[2]
+                            viewHeight = nums[3]
+                        }
+                    }
+                    break
+                }
+                ev = parser.next()
+            }
+
+            val svgW = when {
+                viewWidth > 0f -> viewWidth
+                explicitW > 0f -> explicitW
+                else -> 512f
+            }
+            val svgH = when {
+                viewHeight > 0f -> viewHeight
+                explicitH > 0f -> explicitH
+                else -> 512f
+            }
+
+            val targetMax = maxDimension.coerceIn(256, 1080)
+            val aspect = (svgW / svgH).coerceIn(0.2f, 5.0f)
+            val (bmpW, bmpH) = if (aspect >= 1.0f) {
+                targetMax to (targetMax / aspect).roundToInt().coerceAtLeast(1)
+            } else {
+                (targetMax * aspect).roundToInt().coerceAtLeast(1) to targetMax
+            }
+
+            val bitmap = Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bitmap)
+            canvas.drawColor(Color.WHITE)
+
+            val scale = minOf(bmpW.toFloat() / svgW, bmpH.toFloat() / svgH)
+            val dx = (bmpW - svgW * scale) / 2f - viewMinX * scale
+            val dy = (bmpH - svgH * scale) / 2f - viewMinY * scale
+            canvas.save()
+            canvas.translate(dx, dy)
+            canvas.scale(scale, scale)
+
+            // Second pass to render vector elements
+            val renderParser = factory.newPullParser()
+            renderParser.setInput(StringReader(svgText))
+            var event = renderParser.eventType
+
+            fun resolveCurrentStyle(): SvgStyle {
+                val parent = styleStack.last()
+                val styleMap = parseStyleMap(renderParser.getAttributeValue(null, "style"))
+                val fillAttr = styleMap["fill"] ?: renderParser.getAttributeValue(null, "fill") ?: parent.fill
+                val strokeAttr = styleMap["stroke"] ?: renderParser.getAttributeValue(null, "stroke") ?: parent.stroke
+                val swAttr = parseDimen(
+                    styleMap["stroke-width"] ?: renderParser.getAttributeValue(null, "stroke-width")
+                ) ?: parent.strokeWidth
+                return SvgStyle(fill = fillAttr, stroke = strokeAttr, strokeWidth = swAttr)
+            }
+
+            fun drawAndroidPath(path: android.graphics.Path, style: SvgStyle) {
+                val fillColor = parseSvgColor(style.fill)
+                if (fillColor != null) {
+                    val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color = fillColor
+                        this.style = Paint.Style.FILL
+                    }
+                    canvas.drawPath(path, fillPaint)
+                }
+                val strokeColor = parseSvgColor(style.stroke)
+                if (strokeColor != null) {
+                    val strokePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                        color = strokeColor
+                        this.style = Paint.Style.STROKE
+                        strokeWidth = (style.strokeWidth ?: 1.5f).coerceAtLeast(0.5f)
+                        strokeCap = Paint.Cap.ROUND
+                        strokeJoin = Paint.Join.ROUND
+                    }
+                    canvas.drawPath(path, strokePaint)
+                }
+            }
+
+            while (event != XmlPullParser.END_DOCUMENT) {
+                when (event) {
+                    XmlPullParser.START_TAG -> {
+                        val tag = renderParser.name.lowercase(Locale.ROOT)
+                        val curStyle = resolveCurrentStyle()
+                        styleStack.addLast(curStyle)
+
+                        when (tag) {
+                            "path" -> {
+                                val d = renderParser.getAttributeValue(null, "d")
+                                if (!d.isNullOrBlank()) {
+                                    runCatching {
+                                        val p = PathParser.createPathFromPathData(d)
+                                        if (p != null) drawAndroidPath(p, curStyle)
+                                    }
+                                }
+                            }
+                            "rect" -> {
+                                val x = parseDimen(renderParser.getAttributeValue(null, "x")) ?: 0f
+                                val y = parseDimen(renderParser.getAttributeValue(null, "y")) ?: 0f
+                                val w = parseDimen(renderParser.getAttributeValue(null, "width")) ?: 0f
+                                val h = parseDimen(renderParser.getAttributeValue(null, "height")) ?: 0f
+                                val rx = parseDimen(renderParser.getAttributeValue(null, "rx")) ?: 0f
+                                val ry = parseDimen(renderParser.getAttributeValue(null, "ry")) ?: rx
+                                if (w > 0f && h > 0f) {
+                                    val p = android.graphics.Path().apply {
+                                        addRoundRect(
+                                            RectF(x, y, x + w, y + h),
+                                            rx,
+                                            ry,
+                                            android.graphics.Path.Direction.CW
+                                        )
+                                    }
+                                    drawAndroidPath(p, curStyle)
+                                }
+                            }
+                            "circle" -> {
+                                val cx = parseDimen(renderParser.getAttributeValue(null, "cx")) ?: 0f
+                                val cy = parseDimen(renderParser.getAttributeValue(null, "cy")) ?: 0f
+                                val r = parseDimen(renderParser.getAttributeValue(null, "r")) ?: 0f
+                                if (r > 0f) {
+                                    val p = android.graphics.Path().apply {
+                                        addCircle(cx, cy, r, android.graphics.Path.Direction.CW)
+                                    }
+                                    drawAndroidPath(p, curStyle)
+                                }
+                            }
+                            "ellipse" -> {
+                                val cx = parseDimen(renderParser.getAttributeValue(null, "cx")) ?: 0f
+                                val cy = parseDimen(renderParser.getAttributeValue(null, "cy")) ?: 0f
+                                val rx = parseDimen(renderParser.getAttributeValue(null, "rx")) ?: 0f
+                                val ry = parseDimen(renderParser.getAttributeValue(null, "ry")) ?: 0f
+                                if (rx > 0f && ry > 0f) {
+                                    val p = android.graphics.Path().apply {
+                                        addOval(
+                                            RectF(cx - rx, cy - ry, cx + rx, cy + ry),
+                                            android.graphics.Path.Direction.CW
+                                        )
+                                    }
+                                    drawAndroidPath(p, curStyle)
+                                }
+                            }
+                            "line" -> {
+                                val x1 = parseDimen(renderParser.getAttributeValue(null, "x1")) ?: 0f
+                                val y1 = parseDimen(renderParser.getAttributeValue(null, "y1")) ?: 0f
+                                val x2 = parseDimen(renderParser.getAttributeValue(null, "x2")) ?: 0f
+                                val y2 = parseDimen(renderParser.getAttributeValue(null, "y2")) ?: 0f
+                                val p = android.graphics.Path().apply {
+                                    moveTo(x1, y1)
+                                    lineTo(x2, y2)
+                                }
+                                val lineStyle = if (curStyle.stroke.isNullOrBlank()) {
+                                    curStyle.copy(fill = "none", stroke = curStyle.fill ?: "#000000")
+                                } else {
+                                    curStyle.copy(fill = "none")
+                                }
+                                drawAndroidPath(p, lineStyle)
+                            }
+                            "polygon", "polyline" -> {
+                                val ptsRaw = renderParser.getAttributeValue(null, "points")
+                                if (!ptsRaw.isNullOrBlank()) {
+                                    val coords = ptsRaw.trim()
+                                        .split(Regex("[\\s,]+"))
+                                        .mapNotNull { it.toFloatOrNull() }
+                                    if (coords.size >= 4) {
+                                        val p = android.graphics.Path().apply {
+                                            moveTo(coords[0], coords[1])
+                                            var idx = 2
+                                            while (idx + 1 < coords.size) {
+                                                lineTo(coords[idx], coords[idx + 1])
+                                                idx += 2
+                                            }
+                                            if (tag == "polygon") close()
+                                        }
+                                        drawAndroidPath(p, curStyle)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    XmlPullParser.END_TAG -> {
+                        if (styleStack.size > 1) {
+                            styleStack.removeLast()
+                        }
+                    }
+                }
+                event = renderParser.next()
+            }
+
+            canvas.restore()
+            bitmap
+        } catch (_: Exception) {
+            null
+        }
     }
 
     private fun readExifRotation(filePath: String): Int {

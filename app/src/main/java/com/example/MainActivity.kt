@@ -896,11 +896,7 @@ private fun InAppComicFileRow(
                     modifier = Modifier.size(18.dp)
                 )
             } else {
-                val badgeText = if (item.isImage) {
-                    "VIEW IMG"
-                } else {
-                    FileHelper.getFileFormatBadge(File(item.absolutePath))
-                }
+                val badgeText = FileHelper.getFileFormatBadge(File(item.absolutePath))
                 Box(
                     modifier = Modifier
                         .background(ComicBlack)
