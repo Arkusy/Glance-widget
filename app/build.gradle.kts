@@ -162,23 +162,27 @@ val rootApkDir = rootProject.layout.projectDirectory.dir("apk").asFile
 val buildApkOutputsDir = layout.buildDirectory.dir("outputs/apk")
 
 val copyApksToRootFolder by tasks.registering {
-  description = "Copies generated APK files into the root /apk directory"
+  description = "Copies only the 2 standalone debug APKs (arm64-v8a and x86_64) into the root /apk directory"
   val targetDir = rootApkDir
   val sourceDirProvider = buildApkOutputsDir
   doLast {
     if (!targetDir.exists()) {
       targetDir.mkdirs()
     }
+    // Clean up any duplicate app-*.apk or universal APK files so only the 2 ABI APKs remain
+    targetDir.listFiles()?.forEach { existingFile ->
+      if (existingFile.isFile &&
+          existingFile.name != "GlanceFiles-arm64-v8a-debug.apk" &&
+          existingFile.name != "GlanceFiles-x86_64-debug.apk") {
+        existingFile.delete()
+      }
+    }
     val outputsDir = sourceDirProvider.get().asFile
     if (outputsDir.exists()) {
       outputsDir.walkTopDown()
         .filter { it.isFile && it.extension == "apk" }
         .forEach { apkFile ->
-          apkFile.copyTo(File(targetDir, apkFile.name), overwrite = true)
           when (apkFile.name) {
-            "app-debug.apk" -> {
-              apkFile.copyTo(File(targetDir, "GlanceFiles-debug.apk"), overwrite = true)
-            }
             "app-arm64-v8a-debug.apk" -> {
               apkFile.copyTo(File(targetDir, "GlanceFiles-arm64-v8a-debug.apk"), overwrite = true)
             }

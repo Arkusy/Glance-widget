@@ -1,23 +1,43 @@
-name: Build Android APK (arm64-v8a & x86_64)
+name: Build & Release Android APKs (arm64-v8a & x86_64)
 
 on:
   push:
     branches: [ "main", "master" ]
+    tags: [ "v*" ]
   pull_request:
     branches: [ "main", "master" ]
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build-apks:
-    name: Build Standalone APKs (arm64-v8a & x86_64)
+    name: Build & Release Standalone Debug APKs (arm64-v8a & x86_64)
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Remove Extra Duplicate APKs from Repository (If Previously Pushed)
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+        run: |
+          REMOVED=0
+          for extra_apk in apk/app-*.apk apk/GlanceFiles-debug.apk; do
+            if [ -e "$extra_apk" ]; then
+              git rm -f --ignore-unmatch "$extra_apk"
+              REMOVED=1
+            fi
+          done
+          if [ "$REMOVED" -eq 1 ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git commit -m "chore: remove duplicate APKs from /apk folder [skip ci]" || true
+            git push || true
+          fi
 
       - name: Set up JDK 21
         uses: actions/setup-java@v4
@@ -52,25 +72,52 @@ jobs:
               -dname "CN=Android Debug,O=Android,C=US"
           fi
 
-      - name: Build Standalone arm64-v8a & x86_64 APKs
-        run: gradle assembleDebug -PenableAbiSplits=true --no-daemon
+      - name: Build Standalone arm64-v8a & x86_64 Debug APKs
+        run: |
+          gradle assembleDebug -PenableAbiSplits=true --no-daemon
+          mkdir -p release-assets
+          cp app/build/outputs/apk/debug/app-arm64-v8a-debug.apk release-assets/GlanceFiles-arm64-v8a-debug.apk
+          cp app/build/outputs/apk/debug/app-x86_64-debug.apk release-assets/GlanceFiles-x86_64-debug.apk
 
-      - name: Upload Standalone arm64-v8a APK (v4)
+      - name: Upload Standalone arm64-v8a APK Artifact (v4)
         uses: actions/upload-artifact@v4
         with:
-          name: GlanceFiles-arm64-v8a-apk
-          path: |
-            apk/GlanceFiles-arm64-v8a-debug.apk
-            app/build/outputs/apk/debug/app-arm64-v8a-debug.apk
+          name: GlanceFiles-arm64-v8a-debug-apk
+          path: release-assets/GlanceFiles-arm64-v8a-debug.apk
           if-no-files-found: error
           retention-days: 30
 
-      - name: Upload Standalone x86_64 APK (v4)
+      - name: Upload Standalone x86_64 APK Artifact (v4)
         uses: actions/upload-artifact@v4
         with:
-          name: GlanceFiles-x86_64-apk
-          path: |
-            apk/GlanceFiles-x86_64-debug.apk
-            app/build/outputs/apk/debug/app-x86_64-debug.apk
+          name: GlanceFiles-x86_64-debug-apk
+          path: release-assets/GlanceFiles-x86_64-debug.apk
           if-no-files-found: error
           retention-days: 30
+
+      - name: Publish Both Debug APKs to GitHub Releases / Assets
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG_NAME="${GITHUB_REF#refs/tags/}"
+          else
+            TAG_NAME="v1.0.${{ github.run_number }}"
+          fi
+          RELEASE_TITLE="Glance Files ${TAG_NAME} (arm64-v8a & x86_64)"
+          if gh release view "${TAG_NAME}" >/dev/null 2>&1; then
+            gh release upload "${TAG_NAME}" \
+              release-assets/GlanceFiles-arm64-v8a-debug.apk \
+              release-assets/GlanceFiles-x86_64-debug.apk \
+              --clobber
+          else
+            gh release create "${TAG_NAME}" \
+              release-assets/GlanceFiles-arm64-v8a-debug.apk \
+              release-assets/GlanceFiles-x86_64-debug.apk \
+              --title "${RELEASE_TITLE}" \
+              --notes "Standalone Debug APKs built automatically by GitHub Actions:
+          - **GlanceFiles-arm64-v8a-debug.apk** (ARM64 phones/tablets)
+          - **GlanceFiles-x86_64-debug.apk** (x86_64 emulators/devices)" \
+              --latest
+          fi

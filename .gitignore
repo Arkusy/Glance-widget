@@ -16,5 +16,6 @@
 local.properties
 .env
 debug.keystore
-!/apk/
-!/apk/*.apk
+/apk/*
+!/apk/GlanceFiles-arm64-v8a-debug.apk
+!/apk/GlanceFiles-x86_64-debug.apk
