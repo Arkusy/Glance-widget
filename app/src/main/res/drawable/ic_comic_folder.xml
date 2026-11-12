@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <!-- Crisp white comic folder body with 2dp sharp black ink border -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:strokeColor="#000000"
+        android:strokeWidth="2"
+        android:strokeLineCap="square"
+        android:strokeLineJoin="miter"
+        android:pathData="M3,5H10L12,8H21V19H3V5Z" />
+    <!-- Top comic ink tab stripe -->
+    <path
+        android:fillColor="#000000"
+        android:pathData="M3,8H21V10H3Z" />
+</vector>

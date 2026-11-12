@@ -1,0 +1,6 @@
+{
+  "name": "Glance Files",
+  "description": "Interactive Android home screen file browser widget built with Jetpack Glance and Material 3.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

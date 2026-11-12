@@ -1,0 +1,14 @@
+<resources>
+    <string name="app_name">Glance Files</string>
+    <string name="widget_description">Comic Panel file browser and in-widget image viewer for your home screen.</string>
+    <string name="widget_loading_text">LOADING COMIC PANEL WIDGET…</string>
+    <string name="fullscreen_image_title">Image Viewer</string>
+    <string name="main_header_title">COMIC FILE WIDGET</string>
+    <string name="storage_access_active">Storage Access: Active ✓</string>
+    <string name="btn_grant_storage_access">Grant Storage Access</string>
+    <string name="btn_add_widget_home_screen">Add Widget to Home Screen</string>
+    <string name="widget_empty_folder_title">FOLDER IS EMPTY</string>
+    <string name="widget_unreadable_title">CANNOT READ FOLDER</string>
+    <string name="widget_reset_root_button">RETURN TO ROOT</string>
+    <string name="toast_no_app_for_file">No installed app found to open this file type.</string>
+</resources>

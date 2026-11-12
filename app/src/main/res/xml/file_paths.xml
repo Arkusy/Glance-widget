@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- External shared storage (/storage/emulated/0) -->
+    <external-path
+        name="external_storage_root"
+        path="." />
+
+    <!-- Root fallback for devices with custom mount points -->
+    <root-path
+        name="device_root"
+        path="." />
+
+    <!-- App-specific internal & external directories -->
+    <files-path
+        name="internal_files"
+        path="." />
+    <cache-path
+        name="internal_cache"
+        path="." />
+    <external-files-path
+        name="app_external_files"
+        path="." />
+    <external-cache-path
+        name="app_external_cache"
+        path="." />
+</paths>
