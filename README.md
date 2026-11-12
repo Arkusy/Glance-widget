@@ -9,9 +9,7 @@
 ## Preview
 
 <div align="center">
-  <img src="public/assets/aistudio/Screenshot_20261112-203107_Glance_Files_acc278cb.png" alt="File Browser Widget Preview" width="280" />
-  &nbsp;&nbsp;
-  <img src="public/assets/aistudio/Screenshot_20261112-212857_Moto_App_Launcher_bdcaf432.png" alt="Image Viewer Widget Preview" width="280" />
+  <img src="public/assets/aistudio/Screenshot_20261112-203107_Glance_Files_acc278cb.png" alt="File Browser Widget Preview" width="300" />
 </div>
 
 ---

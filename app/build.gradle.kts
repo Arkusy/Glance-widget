@@ -164,6 +164,7 @@ val buildApkOutputsDir = layout.buildDirectory.dir("outputs/apk")
 val copyApksToRootFolder by tasks.registering {
   description = "Copies only the 2 standalone debug APKs (arm64-v8a and x86_64) into the root /apk directory"
   val targetDir = rootApkDir
+  val assetsDir = rootProject.layout.projectDirectory.dir("public/assets/aistudio").asFile
   val sourceDirProvider = buildApkOutputsDir
   doLast {
     if (!targetDir.exists()) {
@@ -175,6 +176,16 @@ val copyApksToRootFolder by tasks.registering {
           existingFile.name != "GlanceFiles-arm64-v8a-debug.apk" &&
           existingFile.name != "GlanceFiles-x86_64-debug.apk") {
         existingFile.delete()
+      }
+    }
+    // Ensure personal QR screenshots are deleted from public/assets/aistudio
+    listOf(
+      "Screenshot_20261112-204137_Moto_App_Launcher_ff19b288.png",
+      "Screenshot_20261112-212857_Moto_App_Launcher_bdcaf432.png"
+    ).forEach { fileName ->
+      val f = File(assetsDir, fileName)
+      if (f.exists()) {
+        f.delete()
       }
     }
     val outputsDir = sourceDirProvider.get().asFile

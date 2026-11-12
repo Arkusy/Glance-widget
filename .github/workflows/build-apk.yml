@@ -22,20 +22,24 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Remove Extra Duplicate APKs from Repository (If Previously Pushed)
+      - name: Remove Extra Duplicate APKs & Personal Screenshots from Repository
         if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
         run: |
           REMOVED=0
-          for extra_apk in apk/app-*.apk apk/GlanceFiles-debug.apk; do
-            if [ -e "$extra_apk" ]; then
-              git rm -f --ignore-unmatch "$extra_apk"
+          for extra_file in \
+            apk/app-*.apk \
+            apk/GlanceFiles-debug.apk \
+            public/assets/aistudio/Screenshot_20261112-204137_Moto_App_Launcher_ff19b288.png \
+            public/assets/aistudio/Screenshot_20261112-212857_Moto_App_Launcher_bdcaf432.png; do
+            if [ -e "$extra_file" ]; then
+              git rm -f --ignore-unmatch "$extra_file"
               REMOVED=1
             fi
           done
           if [ "$REMOVED" -eq 1 ]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git commit -m "chore: remove duplicate APKs from /apk folder [skip ci]" || true
+            git commit -m "chore: remove duplicate APKs and personal screenshots [skip ci]" || true
             git push || true
           fi
 
