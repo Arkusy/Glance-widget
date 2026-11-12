@@ -18,6 +18,7 @@ import androidx.glance.action.actionParametersOf
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.GlanceAppWidgetReceiver
+import androidx.glance.appwidget.SizeMode
 import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.lazy.LazyColumn
@@ -68,6 +69,8 @@ class UnifiedComicWidgetReceiver : GlanceAppWidgetReceiver() {
  *    `Fit / Crop` toggle, and tap-to-open [FullscreenImageActivity].
  */
 class UnifiedComicWidget : GlanceAppWidget() {
+
+    override val sizeMode: SizeMode = SizeMode.Exact
 
     override val stateDefinition: GlanceStateDefinition<*> = PreferencesGlanceStateDefinition
 
@@ -473,10 +476,12 @@ private fun ComicImageViewerModeContent(
     val parentFolderPath = file.parentFile?.absolutePath ?: FileHelper.getRootStoragePath()
     val truncatedPath = FileHelper.getTruncatedDisplayPath(parentFolderPath)
     val widgetSize = LocalSize.current
-    val containerAspect = if (widgetSize.width.value > 0f && widgetSize.height.value > 60f) {
-        ((widgetSize.width.value - 20f) / (widgetSize.height.value - 70f)).coerceIn(0.5f, 2.2f)
+    val frameWidthDp = (widgetSize.width.value - 20f).coerceAtLeast(80f)
+    val frameHeightDp = (widgetSize.height.value - 76f).coerceAtLeast(80f)
+    val containerAspect = if (widgetSize.width.value > 0f && widgetSize.height.value > 0f) {
+        (frameWidthDp / frameHeightDp).coerceIn(0.25f, 4.0f)
     } else {
-        1.1f
+        1.0f
     }
     val bitmap = FileHelper.loadZoomedBitmap(
         filePath = imagePath,
@@ -571,10 +576,8 @@ private fun ComicImageViewerModeContent(
                     Image(
                         provider = ImageProvider(bitmap),
                         contentDescription = file.name,
-                        contentScale = ContentScale.Fit,
-                        modifier = GlanceModifier
-                            .fillMaxSize()
-                            .padding(if (scaleMode.zoomStep == 0) 6.dp else 0.dp)
+                        contentScale = ContentScale.Crop,
+                        modifier = GlanceModifier.fillMaxSize()
                     )
                 }
             }

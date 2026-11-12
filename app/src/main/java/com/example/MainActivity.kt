@@ -16,6 +16,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -938,13 +939,6 @@ private fun InAppComicImageViewerMode(
     val truncatedPath = remember(parentFolderPath) {
         FileHelper.getTruncatedDisplayPath(parentFolderPath)
     }
-    val bitmap = remember(imagePath, scaleMode.zoomStep) {
-        FileHelper.loadZoomedBitmap(
-            filePath = imagePath,
-            zoomFactor = scaleMode.zoomFactor,
-            maxDimension = 1080
-        )
-    }
 
     Column(
         modifier = Modifier
@@ -1049,7 +1043,7 @@ private fun InAppComicImageViewerMode(
         }
 
         // Displayed Image Frame (Tap to open FullscreenImageActivity)
-        Box(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(340.dp)
@@ -1058,14 +1052,25 @@ private fun InAppComicImageViewerMode(
                 .testTag("image_viewer_canvas"),
             contentAlignment = Alignment.Center
         ) {
+            val containerAspect = if (maxWidth.value > 0f && maxHeight.value > 0f) {
+                (maxWidth.value / maxHeight.value).coerceIn(0.25f, 4.0f)
+            } else {
+                1.0f
+            }
+            val bitmap = remember(imagePath, scaleMode.zoomStep, containerAspect) {
+                FileHelper.loadZoomedBitmap(
+                    filePath = imagePath,
+                    zoomFactor = scaleMode.zoomFactor,
+                    containerAspect = containerAspect,
+                    maxDimension = 1080
+                )
+            }
             if (bitmap != null) {
                 Image(
                     bitmap = bitmap.asImageBitmap(),
                     contentDescription = file.name,
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(if (scaleMode.zoomStep == 0) 8.dp else 0.dp)
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
                 )
             } else {
                 Text(

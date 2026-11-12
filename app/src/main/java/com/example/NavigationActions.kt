@@ -35,14 +35,14 @@ enum class UnifiedWidgetMode(val storageKey: String) {
 }
 
 /**
- * 3-step Zoom-In (+10% per click) / 3-step Zoom-Out (-10% per click) state machine inside
+ * 3-step Zoom-In (+20% per click) / 3-step Zoom-Out (-20% per click) state machine inside
  * [UnifiedWidgetMode.IMAGE_VIEWER]:
  * - [ZOOM_0_IN]: Base 1.00x view (0% zoom). Shows Zoom-In (`+`) icon.
- * - [ZOOM_1_IN]: 1st Zoom-In (1.10x, +10%). Shows Zoom-In (`+`) icon.
- * - [ZOOM_2_IN]: 2nd Zoom-In (1.20x, +20%). Shows Zoom-In (`+`) icon.
- * - [ZOOM_3_OUT]: 3rd Zoom-In (1.30x, +30%). All 3 zoom-ins done -> swaps icon to Zoom-Out (`-`).
- * - [ZOOM_2_OUT]: 1st Zoom-Out (1.20x, +20%). Shows Zoom-Out (`-`) icon.
- * - [ZOOM_1_OUT]: 2nd Zoom-Out (1.10x, +10%). Shows Zoom-Out (`-`) icon.
+ * - [ZOOM_1_IN]: 1st Zoom-In (1.20x, +20%). Shows Zoom-In (`+`) icon.
+ * - [ZOOM_2_IN]: 2nd Zoom-In (1.40x, +40%). Shows Zoom-In (`+`) icon.
+ * - [ZOOM_3_OUT]: 3rd Zoom-In (1.60x, +60%). All 3 zoom-ins done -> swaps icon to Zoom-Out (`-`).
+ * - [ZOOM_2_OUT]: 1st Zoom-Out (1.40x, +40%). Shows Zoom-Out (`-`) icon.
+ * - [ZOOM_1_OUT]: 2nd Zoom-Out (1.20x, +20%). Shows Zoom-Out (`-`) icon.
  *   (3rd zoom-out returns to [ZOOM_0_IN] at 1.00x and swaps icon back to Zoom-In `+`).
  */
 enum class WidgetImageScaleMode(
@@ -52,11 +52,11 @@ enum class WidgetImageScaleMode(
     val showZoomOutIcon: Boolean
 ) {
     ZOOM_0_IN(storageKey = "ZOOM_0_IN", zoomStep = 0, zoomFactor = 1.00f, showZoomOutIcon = false),
-    ZOOM_1_IN(storageKey = "ZOOM_1_IN", zoomStep = 1, zoomFactor = 1.10f, showZoomOutIcon = false),
-    ZOOM_2_IN(storageKey = "ZOOM_2_IN", zoomStep = 2, zoomFactor = 1.20f, showZoomOutIcon = false),
-    ZOOM_3_OUT(storageKey = "ZOOM_3_OUT", zoomStep = 3, zoomFactor = 1.30f, showZoomOutIcon = true),
-    ZOOM_2_OUT(storageKey = "ZOOM_2_OUT", zoomStep = 2, zoomFactor = 1.20f, showZoomOutIcon = true),
-    ZOOM_1_OUT(storageKey = "ZOOM_1_OUT", zoomStep = 1, zoomFactor = 1.10f, showZoomOutIcon = true);
+    ZOOM_1_IN(storageKey = "ZOOM_1_IN", zoomStep = 1, zoomFactor = 1.20f, showZoomOutIcon = false),
+    ZOOM_2_IN(storageKey = "ZOOM_2_IN", zoomStep = 2, zoomFactor = 1.40f, showZoomOutIcon = false),
+    ZOOM_3_OUT(storageKey = "ZOOM_3_OUT", zoomStep = 3, zoomFactor = 1.60f, showZoomOutIcon = true),
+    ZOOM_2_OUT(storageKey = "ZOOM_2_OUT", zoomStep = 2, zoomFactor = 1.40f, showZoomOutIcon = true),
+    ZOOM_1_OUT(storageKey = "ZOOM_1_OUT", zoomStep = 1, zoomFactor = 1.20f, showZoomOutIcon = true);
 
     fun toggled(): WidgetImageScaleMode = when (this) {
         ZOOM_0_IN -> ZOOM_1_IN

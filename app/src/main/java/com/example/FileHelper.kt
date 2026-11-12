@@ -624,14 +624,16 @@ object FileHelper {
     }
 
     /**
-     * Loads a downsampled bitmap from [filePath] and applies a viewport-aware center zoom of
-     * [zoomFactor] (`1.00f`, `1.10f`, `1.20f`, `1.30f` — 3 steps of +10% each).
+     * Loads a downsampled bitmap from [filePath] and renders it onto a viewport canvas matching
+     * [containerAspect] at magnification `baseFitScale * zoomFactor` (`1.00f`, `1.20f`, `1.40f`, `1.60f` —
+     * 3 steps of +20% each).
      *
-     * Unlike a naive crop that re-scales back to `(srcW, srcH)` (which locks a portrait image into
-     * its narrow portrait ratio and leaves unused space on both sides of a `1:1` widget), this
-     * computes the visible viewport relative to [containerAspect] and returns the cropped region
-     * directly so that zooming a portrait image expands it horizontally into the remaining space
-     * on both sides of the widget.
+     * Because the output bitmap matches the exact aspect ratio of the widget's image container:
+     * - Resizing the widget horizontally or vertically dynamically scales the image to utilize all
+     *   available vertical or horizontal space.
+     * - Every zoom step strictly magnifies both width and height by +20% from the center, expanding
+     *   into any free horizontal OR vertical space without ever shrinking the image or adding top/bottom
+     *   empty bars.
      */
     fun loadZoomedBitmap(
         filePath: String?,
@@ -640,39 +642,45 @@ object FileHelper {
         maxDimension: Int = MAX_WIDGET_BITMAP_DIMENSION
     ): Bitmap? {
         val baseBitmap = loadDownsampledBitmap(filePath, maxDimension) ?: return null
-        if (zoomFactor <= 1.005f) return baseBitmap
 
         return try {
             val srcW = baseBitmap.width
             val srcH = baseBitmap.height
-            val srcAspect = srcW.toFloat() / srcH.toFloat()
-            val targetAspect = containerAspect.coerceIn(0.4f, 2.5f)
+            if (srcW <= 0 || srcH <= 0) return baseBitmap
 
-            val (cropW, cropH) = if (srcAspect < targetAspect) {
-                // Portrait (taller) image inside a wider/square widget:
-                // Reduce height by zoomFactor so the image scales up and expands horizontally
-                // into the remaining space on both left and right sides without clipping width
-                // until the expanded width reaches the container width.
-                val h = (srcH / zoomFactor).roundToInt().coerceIn(1, srcH)
-                val w = ((srcH * targetAspect) / zoomFactor).roundToInt().coerceIn(1, srcW)
-                w to h
+            val targetAspect = containerAspect.coerceIn(0.25f, 4.0f)
+            val canvasMax = 840
+            val (outW, outH) = if (targetAspect >= 1.0f) {
+                canvasMax to (canvasMax / targetAspect).roundToInt().coerceAtLeast(1)
             } else {
-                // Landscape (wider) or matching-aspect image:
-                // Reduce width by zoomFactor so the image scales up and expands vertically
-                // into any remaining top/bottom space.
-                val w = (srcW / zoomFactor).roundToInt().coerceIn(1, srcW)
-                val h = ((srcW / targetAspect) / zoomFactor).roundToInt().coerceIn(1, srcH)
-                w to h
+                (canvasMax * targetAspect).roundToInt().coerceAtLeast(1) to canvasMax
             }
 
-            val startX = ((srcW - cropW) / 2).coerceAtLeast(0)
-            val startY = ((srcH - cropH) / 2).coerceAtLeast(0)
+            val viewportBitmap = Bitmap.createBitmap(outW, outH, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(viewportBitmap)
+            canvas.drawColor(Color.WHITE)
 
-            val cropped = Bitmap.createBitmap(baseBitmap, startX, startY, cropW, cropH)
-            if (cropped !== baseBitmap) {
+            // Base scale that fits the entire image inside the current widget viewport (outW x outH)
+            val baseFitScale = minOf(
+                outW.toFloat() / srcW.toFloat(),
+                outH.toFloat() / srcH.toFloat()
+            )
+            // Apply the 20%-per-step zoom factor directly on top of baseFitScale
+            val effectiveScale = baseFitScale * zoomFactor.coerceAtLeast(1.0f)
+
+            val drawW = srcW * effectiveScale
+            val drawH = srcH * effectiveScale
+            val left = (outW - drawW) / 2f
+            val top = (outH - drawH) / 2f
+
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
+            val destRect = RectF(left, top, left + drawW, top + drawH)
+            canvas.drawBitmap(baseBitmap, null, destRect, paint)
+
+            if (viewportBitmap !== baseBitmap) {
                 baseBitmap.recycle()
             }
-            cropped
+            viewportBitmap
         } catch (_: OutOfMemoryError) {
             baseBitmap
         } catch (_: Exception) {
