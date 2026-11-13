@@ -2,6 +2,7 @@ package com.example
 
 import android.content.Context
 import android.content.Intent
+import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.glance.GlanceId
@@ -17,14 +18,17 @@ import java.io.File
  * [PreferencesGlanceStateDefinition]:
  * - [BROWSER]: Displays the scrollable Comic Panel folder and file list.
  * - [IMAGE_VIEWER]: Displays a selected image directly from its device file path with
- *   Back icon, 2x Zoom-In / 2x Zoom-Out icon, and tap-for-fullscreen controls.
+ *   Back icon, 3x Zoom-In / 3x Zoom-Out icon, and tap-for-fullscreen controls.
  * - [TEXT_VIEWER]: Displays a selected `.txt`, code (`.java`, `.c`, etc.), or styled `.md` file
  *   inside a scrollable Comic Panel viewer (with a 1 MB limit and File Picker fallback above 1 MB).
+ * - [PDF_VIEWER]: Displays a selected `.pdf` file inside a scrollable multi-page Comic Panel viewer
+ *   (with a 10 MB limit and File Picker fallback above 10 MB).
  */
 enum class UnifiedWidgetMode(val storageKey: String) {
     BROWSER("BROWSER"),
     IMAGE_VIEWER("IMAGE_VIEWER"),
-    TEXT_VIEWER("TEXT_VIEWER");
+    TEXT_VIEWER("TEXT_VIEWER"),
+    PDF_VIEWER("PDF_VIEWER");
 
     companion object {
         fun fromKey(key: String?): UnifiedWidgetMode {
@@ -83,6 +87,8 @@ object WidgetPreferenceKeys {
     val CURRENT_PATH = stringPreferencesKey("current_path")
     val SELECTED_IMAGE_PATH = stringPreferencesKey("selected_image_path")
     val SELECTED_TEXT_PATH = stringPreferencesKey("selected_text_path")
+    val SELECTED_PDF_PATH = stringPreferencesKey("selected_pdf_path")
+    val PDF_PAGE_OFFSET = intPreferencesKey("pdf_page_offset")
     val IMAGE_SCALE_MODE = stringPreferencesKey("image_scale_mode")
     val REFRESH_TIMESTAMP = longPreferencesKey("refresh_timestamp")
     val LAST_STATUS_MESSAGE = stringPreferencesKey("last_status_message")
@@ -93,6 +99,7 @@ object WidgetPreferenceKeys {
  */
 object WidgetActionParams {
     val TARGET_PATH = ActionParameters.Key<String>("target_path")
+    val PAGE_OFFSET = ActionParameters.Key<Int>("page_offset")
 }
 
 /**
@@ -312,10 +319,66 @@ class LaunchFullscreenImageAction : ActionCallback {
 }
 
 /**
+ * Triggered when tapping a `.pdf` file in `BROWSER` mode.
+ * Switches the widget to [UnifiedWidgetMode.PDF_VIEWER] (enforcing the 10 MB preview limit).
+ */
+class OpenPdfInWidgetAction : ActionCallback {
+    override suspend fun onAction(
+        context: Context,
+        glanceId: GlanceId,
+        parameters: ActionParameters
+    ) {
+        val pdfPath = parameters[WidgetActionParams.TARGET_PATH] ?: return
+
+        updateAppWidgetState(
+            context = context,
+            definition = PreferencesGlanceStateDefinition,
+            glanceId = glanceId
+        ) { prefs ->
+            prefs.toMutablePreferences().apply {
+                this[WidgetPreferenceKeys.WIDGET_MODE] = UnifiedWidgetMode.PDF_VIEWER.storageKey
+                this[WidgetPreferenceKeys.SELECTED_PDF_PATH] = pdfPath
+                this[WidgetPreferenceKeys.PDF_PAGE_OFFSET] = 0
+                this[WidgetPreferenceKeys.REFRESH_TIMESTAMP] = System.currentTimeMillis()
+                this.remove(WidgetPreferenceKeys.LAST_STATUS_MESSAGE)
+            }
+        }
+
+        UnifiedComicWidget().update(context, glanceId)
+    }
+}
+
+/**
+ * Steps between batches of pages in [UnifiedWidgetMode.PDF_VIEWER] when a PDF has more pages
+ * than a single RemoteViews batch.
+ */
+class ChangePdfPageBatchAction : ActionCallback {
+    override suspend fun onAction(
+        context: Context,
+        glanceId: GlanceId,
+        parameters: ActionParameters
+    ) {
+        val newOffset = parameters[WidgetActionParams.PAGE_OFFSET] ?: 0
+
+        updateAppWidgetState(
+            context = context,
+            definition = PreferencesGlanceStateDefinition,
+            glanceId = glanceId
+        ) { prefs ->
+            prefs.toMutablePreferences().apply {
+                this[WidgetPreferenceKeys.PDF_PAGE_OFFSET] = newOffset.coerceAtLeast(0)
+                this[WidgetPreferenceKeys.REFRESH_TIMESTAMP] = System.currentTimeMillis()
+            }
+        }
+
+        UnifiedComicWidget().update(context, glanceId)
+    }
+}
+
+/**
  * Triggered when tapping a non-image file in `BROWSER` mode.
- * - Determines if the clicked file is a valid text or `.md` file via [FileHelper.isValidTextFile].
- * - If valid text/markdown, switches the widget to [UnifiedWidgetMode.TEXT_VIEWER] (which enforces
- *   the 1 MB preview limit and offers the file picker if > 1 MB).
+ * - If `.pdf`, switches the widget to [UnifiedWidgetMode.PDF_VIEWER] (10 MB limit).
+ * - If valid text or `.md` file via [FileHelper.isValidTextFile], switches to [UnifiedWidgetMode.TEXT_VIEWER] (1 MB limit).
  * - Otherwise (binary file), opens the file externally using `FileProvider` and `Intent.ACTION_VIEW`.
  */
 class OpenFileAction : ActionCallback {
@@ -326,6 +389,24 @@ class OpenFileAction : ActionCallback {
     ) {
         val filePath = parameters[WidgetActionParams.TARGET_PATH] ?: return
         val targetFile = File(filePath)
+
+        if (FileHelper.isPdfFile(targetFile)) {
+            updateAppWidgetState(
+                context = context,
+                definition = PreferencesGlanceStateDefinition,
+                glanceId = glanceId
+            ) { prefs ->
+                prefs.toMutablePreferences().apply {
+                    this[WidgetPreferenceKeys.WIDGET_MODE] = UnifiedWidgetMode.PDF_VIEWER.storageKey
+                    this[WidgetPreferenceKeys.SELECTED_PDF_PATH] = targetFile.absolutePath
+                    this[WidgetPreferenceKeys.PDF_PAGE_OFFSET] = 0
+                    this[WidgetPreferenceKeys.REFRESH_TIMESTAMP] = System.currentTimeMillis()
+                    this.remove(WidgetPreferenceKeys.LAST_STATUS_MESSAGE)
+                }
+            }
+            UnifiedComicWidget().update(context, glanceId)
+            return
+        }
 
         if (FileHelper.isValidTextFile(targetFile)) {
             updateAppWidgetState(

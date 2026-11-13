@@ -97,6 +97,8 @@ private fun UnifiedComicWidgetRoot(context: Context) {
     val savedPath = prefs[WidgetPreferenceKeys.CURRENT_PATH]
     val selectedImagePath = prefs[WidgetPreferenceKeys.SELECTED_IMAGE_PATH]
     val selectedTextPath = prefs[WidgetPreferenceKeys.SELECTED_TEXT_PATH]
+    val selectedPdfPath = prefs[WidgetPreferenceKeys.SELECTED_PDF_PATH]
+    val pdfPageOffset = prefs[WidgetPreferenceKeys.PDF_PAGE_OFFSET] ?: 0
     val scaleMode = WidgetImageScaleMode.fromKey(prefs[WidgetPreferenceKeys.IMAGE_SCALE_MODE])
     val statusMessage = prefs[WidgetPreferenceKeys.LAST_STATUS_MESSAGE]
     val refreshTimestamp = prefs[WidgetPreferenceKeys.REFRESH_TIMESTAMP] ?: 0L
@@ -121,6 +123,12 @@ private fun UnifiedComicWidgetRoot(context: Context) {
                 context = context,
                 imagePath = selectedImagePath,
                 scaleMode = scaleMode
+            )
+        } else if (mode == UnifiedWidgetMode.PDF_VIEWER && !selectedPdfPath.isNullOrBlank()) {
+            ComicPdfViewerModeContent(
+                context = context,
+                pdfPath = selectedPdfPath,
+                pageOffset = pdfPageOffset
             )
         } else if (mode == UnifiedWidgetMode.TEXT_VIEWER && !selectedTextPath.isNullOrBlank()) {
             ComicTextViewerModeContent(
@@ -375,6 +383,9 @@ private fun ComicFileRowItem(item: FileBrowserItem) {
             actionParametersOf(WidgetActionParams.TARGET_PATH to item.absolutePath)
         )
         item.isImage -> actionRunCallback<OpenImageInWidgetAction>(
+            actionParametersOf(WidgetActionParams.TARGET_PATH to item.absolutePath)
+        )
+        item.isPdf -> actionRunCallback<OpenPdfInWidgetAction>(
             actionParametersOf(WidgetActionParams.TARGET_PATH to item.absolutePath)
         )
         else -> actionRunCallback<OpenFileAction>(
@@ -835,6 +846,339 @@ private fun ComicTextViewerModeContent(
                                         .fillMaxWidth()
                                         .padding(bottom = 2.dp)
                                 )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/**
+ * Mode 4: `PDF_VIEWER` Mode — Displays `.pdf` files in a scrollable vertical list (`LazyColumn`)
+ * of rendered PDF pages using Android's `PdfRenderer`.
+ * Enforces a `10 MB` preview limit and provides an "Open with File Picker" button if exceeded.
+ */
+@Composable
+private fun ComicPdfViewerModeContent(
+    context: Context,
+    pdfPath: String,
+    pageOffset: Int
+) {
+    val file = File(pdfPath)
+    val parentFolderPath = file.parentFile?.absolutePath ?: FileHelper.getRootStoragePath()
+    val truncatedPath = FileHelper.getTruncatedDisplayPath(parentFolderPath)
+    val titleBitmap = FileHelper.renderComicHeaderBitmap(
+        context = context,
+        title = file.name.ifBlank { "DOCUMENT.PDF" },
+        uppercase = false
+    )
+    val loadResult = FileHelper.loadPdfForPreview(
+        filePath = pdfPath,
+        startPage = pageOffset,
+        maxPages = FileHelper.MAX_GLANCE_PDF_PAGES_PER_BATCH,
+        targetWidthPx = 540
+    )
+
+    Column(
+        modifier = GlanceModifier
+            .fillMaxSize()
+            .background(ComicWhiteProvider)
+            .padding(8.dp)
+    ) {
+        // Top Header Bar: [Back Icon] | PDF Name + Path | [PDF Badge]
+        ComicPanelBox(
+            modifier = GlanceModifier.fillMaxWidth().height(50.dp)
+        ) {
+            Row(
+                modifier = GlanceModifier
+                    .fillMaxSize()
+                    .background(ComicPanelGrayProvider)
+                    .padding(horizontal = 6.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                ComicIconButton(
+                    iconRes = R.drawable.ic_comic_back,
+                    contentDescription = "Back to folder",
+                    enabled = true,
+                    onClick = actionRunCallback<ReturnToBrowserModeAction>()
+                )
+
+                Spacer(modifier = GlanceModifier.width(8.dp))
+
+                Column(
+                    modifier = GlanceModifier.defaultWeight()
+                ) {
+                    Image(
+                        provider = ImageProvider(titleBitmap),
+                        contentDescription = file.name,
+                        modifier = GlanceModifier.height(19.dp)
+                    )
+                    Text(
+                        text = truncatedPath,
+                        style = TextStyle(
+                            color = ComicMutedInkProvider,
+                            fontSize = 10.sp,
+                            fontFamily = FontFamily.Monospace,
+                            fontWeight = FontWeight.Medium
+                        ),
+                        maxLines = 1
+                    )
+                }
+
+                Spacer(modifier = GlanceModifier.width(6.dp))
+
+                Box(
+                    modifier = GlanceModifier
+                        .background(ComicBlackProvider)
+                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = FileHelper.getFileFormatBadge(file),
+                        style = TextStyle(
+                            color = ComicWhiteProvider,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontFamily = FontFamily.Monospace
+                        )
+                    )
+                }
+            }
+        }
+
+        Spacer(modifier = GlanceModifier.height(6.dp))
+
+        // Main Scrollable PDF Pages Frame
+        ComicPanelBox(
+            modifier = GlanceModifier.fillMaxSize()
+        ) {
+            when (loadResult) {
+                is PdfFileLoadResult.TooLargeForPreview -> {
+                    Column(
+                        modifier = GlanceModifier
+                            .fillMaxSize()
+                            .background(ComicWhiteProvider)
+                            .padding(14.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "FILE EXCEEDS 10 MB LIMIT",
+                            style = TextStyle(
+                                color = ComicBlackProvider,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        )
+                        Spacer(modifier = GlanceModifier.height(4.dp))
+                        Text(
+                            text = "${loadResult.fileName} (${loadResult.formattedSize} > 10.0 MB)",
+                            style = TextStyle(
+                                color = ComicMutedInkProvider,
+                                fontSize = 11.sp,
+                                fontFamily = FontFamily.Monospace
+                            ),
+                            maxLines = 2
+                        )
+                        Spacer(modifier = GlanceModifier.height(12.dp))
+                        Box(
+                            modifier = GlanceModifier
+                                .background(ComicBlackProvider)
+                                .cornerRadius(2.dp)
+                                .clickable(
+                                    actionRunCallback<LaunchFilePickerAction>(
+                                        actionParametersOf(WidgetActionParams.TARGET_PATH to pdfPath)
+                                    )
+                                )
+                                .padding(horizontal = 14.dp, vertical = 8.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "OPEN WITH FILE PICKER",
+                                style = TextStyle(
+                                    color = ComicWhiteProvider,
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    fontFamily = FontFamily.Monospace
+                                )
+                            )
+                        }
+                    }
+                }
+
+                is PdfFileLoadResult.Unreadable -> {
+                    Column(
+                        modifier = GlanceModifier
+                            .fillMaxSize()
+                            .background(ComicWhiteProvider)
+                            .padding(14.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = "CANNOT READ PDF",
+                            style = TextStyle(
+                                color = ComicBlackProvider,
+                                fontSize = 13.sp,
+                                fontWeight = FontWeight.Bold,
+                                fontFamily = FontFamily.Monospace
+                            )
+                        )
+                        Spacer(modifier = GlanceModifier.height(4.dp))
+                        Text(
+                            text = loadResult.reason,
+                            style = TextStyle(
+                                color = ComicMutedInkProvider,
+                                fontSize = 11.sp
+                            ),
+                            maxLines = 2
+                        )
+                    }
+                }
+
+                is PdfFileLoadResult.Success -> {
+                    val widgetSize = LocalSize.current
+                    val pageWidthDp = (widgetSize.width.value - 36f).coerceAtLeast(180f)
+                    val hasMoreBatches = loadResult.totalPages > FileHelper.MAX_GLANCE_PDF_PAGES_PER_BATCH
+                    val canPrevBatch = loadResult.startPageIndex > 0
+                    val canNextBatch = loadResult.endPageExclusive < loadResult.totalPages
+
+                    Column(
+                        modifier = GlanceModifier
+                            .fillMaxSize()
+                            .background(ComicWhiteProvider)
+                    ) {
+                        if (hasMoreBatches) {
+                            Row(
+                                modifier = GlanceModifier
+                                    .fillMaxWidth()
+                                    .background(ComicPanelGrayProvider)
+                                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = GlanceModifier
+                                        .background(if (canPrevBatch) ComicBlackProvider else ComicDisabledInkProvider)
+                                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                                        .let { mod ->
+                                            if (canPrevBatch) {
+                                                mod.clickable(
+                                                    actionRunCallback<ChangePdfPageBatchAction>(
+                                                        actionParametersOf(
+                                                            WidgetActionParams.PAGE_OFFSET to
+                                                                (loadResult.startPageIndex - FileHelper.MAX_GLANCE_PDF_PAGES_PER_BATCH).coerceAtLeast(0)
+                                                        )
+                                                    )
+                                                )
+                                            } else {
+                                                mod
+                                            }
+                                        }
+                                ) {
+                                    Text(
+                                        text = "← PREV",
+                                        style = TextStyle(
+                                            color = ComicWhiteProvider,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                    )
+                                }
+
+                                Text(
+                                    text = "PAGES ${loadResult.startPageIndex + 1}–${loadResult.endPageExclusive} OF ${loadResult.totalPages}",
+                                    style = TextStyle(
+                                        color = ComicBlackProvider,
+                                        fontSize = 9.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        fontFamily = FontFamily.Monospace
+                                    ),
+                                    modifier = GlanceModifier.defaultWeight().padding(horizontal = 6.dp)
+                                )
+
+                                Box(
+                                    modifier = GlanceModifier
+                                        .background(if (canNextBatch) ComicBlackProvider else ComicDisabledInkProvider)
+                                        .padding(horizontal = 8.dp, vertical = 3.dp)
+                                        .let { mod ->
+                                            if (canNextBatch) {
+                                                mod.clickable(
+                                                    actionRunCallback<ChangePdfPageBatchAction>(
+                                                        actionParametersOf(
+                                                            WidgetActionParams.PAGE_OFFSET to loadResult.endPageExclusive
+                                                        )
+                                                    )
+                                                )
+                                            } else {
+                                                mod
+                                            }
+                                        }
+                                ) {
+                                    Text(
+                                        text = "NEXT →",
+                                        style = TextStyle(
+                                            color = ComicWhiteProvider,
+                                            fontSize = 9.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                    )
+                                }
+                            }
+                        }
+
+                        LazyColumn(
+                            modifier = GlanceModifier
+                                .fillMaxSize()
+                                .background(ComicWhiteProvider)
+                                .padding(6.dp)
+                        ) {
+                            items(
+                                items = loadResult.pages,
+                                itemId = { it.pageNumber.toLong() }
+                            ) { renderedPage ->
+                                val bmpAspect = renderedPage.bitmap.height.toFloat() /
+                                    renderedPage.bitmap.width.toFloat().coerceAtLeast(1f)
+                                val pageHeightDp = (pageWidthDp * bmpAspect).coerceIn(140f, 520f).dp
+
+                                Column(
+                                    modifier = GlanceModifier
+                                        .fillMaxWidth()
+                                        .padding(bottom = 8.dp)
+                                ) {
+                                    Box(
+                                        modifier = GlanceModifier
+                                            .fillMaxWidth()
+                                            .background(ComicBlackProvider)
+                                            .padding(horizontal = 8.dp, vertical = 3.dp)
+                                    ) {
+                                        Text(
+                                            text = "PAGE ${renderedPage.pageNumber} OF ${renderedPage.totalPages}",
+                                            style = TextStyle(
+                                                color = ComicWhiteProvider,
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                fontFamily = FontFamily.Monospace
+                                            )
+                                        )
+                                    }
+                                    ComicPanelBox(
+                                        modifier = GlanceModifier
+                                            .fillMaxWidth()
+                                            .height(pageHeightDp)
+                                    ) {
+                                        Image(
+                                            provider = ImageProvider(renderedPage.bitmap),
+                                            contentDescription = "Page ${renderedPage.pageNumber}",
+                                            contentScale = ContentScale.Fit,
+                                            modifier = GlanceModifier.fillMaxSize()
+                                        )
+                                    }
+                                }
                             }
                         }
                     }

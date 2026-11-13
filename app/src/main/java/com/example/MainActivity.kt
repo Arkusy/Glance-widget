@@ -125,6 +125,12 @@ fun ComicCompanionAndPreviewScreen() {
     var selectedTextPath by rememberSaveable {
         mutableStateOf<String?>(null)
     }
+    var selectedPdfPath by rememberSaveable {
+        mutableStateOf<String?>(null)
+    }
+    var pdfPageOffset by rememberSaveable {
+        mutableIntStateOf(0)
+    }
     var imageScaleMode by rememberSaveable {
         mutableStateOf(WidgetImageScaleMode.ZOOM_0_IN)
     }
@@ -158,9 +164,13 @@ fun ComicCompanionAndPreviewScreen() {
     BackHandler(
         enabled = widgetMode == UnifiedWidgetMode.IMAGE_VIEWER ||
             widgetMode == UnifiedWidgetMode.TEXT_VIEWER ||
+            widgetMode == UnifiedWidgetMode.PDF_VIEWER ||
             !isAtRoot
     ) {
-        if (widgetMode == UnifiedWidgetMode.IMAGE_VIEWER || widgetMode == UnifiedWidgetMode.TEXT_VIEWER) {
+        if (widgetMode == UnifiedWidgetMode.IMAGE_VIEWER ||
+            widgetMode == UnifiedWidgetMode.TEXT_VIEWER ||
+            widgetMode == UnifiedWidgetMode.PDF_VIEWER
+        ) {
             widgetMode = UnifiedWidgetMode.BROWSER
             imageScaleMode = WidgetImageScaleMode.ZOOM_0_IN
             coroutineScope.launch {
@@ -170,6 +180,8 @@ fun ComicCompanionAndPreviewScreen() {
                     currentPath = currentPath,
                     selectedImagePath = selectedImagePath,
                     selectedTextPath = selectedTextPath,
+                    selectedPdfPath = selectedPdfPath,
+                    pdfPageOffset = pdfPageOffset,
                     scaleMode = WidgetImageScaleMode.ZOOM_0_IN
                 )
             }
@@ -298,7 +310,7 @@ fun ComicCompanionAndPreviewScreen() {
                     }
                 }
 
-                // 3. FILE BROWSER WIDGET PREVIEW (including IMAGE_VIEWER and TEXT_VIEWER modes)
+                // 3. FILE BROWSER WIDGET PREVIEW (including IMAGE_VIEWER, TEXT_VIEWER, and PDF_VIEWER modes)
                 ComicWidgetInteractivePreviewSection(
                     mode = widgetMode,
                     currentPath = currentPath,
@@ -306,6 +318,8 @@ fun ComicCompanionAndPreviewScreen() {
                     showHidden = showHidden,
                     selectedImagePath = selectedImagePath,
                     selectedTextPath = selectedTextPath,
+                    selectedPdfPath = selectedPdfPath,
+                    pdfPageOffset = pdfPageOffset,
                     imageScaleMode = imageScaleMode,
                     directoryResult = directoryResult,
                     onNavigateFolder = { targetFolder ->
@@ -413,7 +427,23 @@ fun ComicCompanionAndPreviewScreen() {
                     },
                     onOpenNonImageFile = { item ->
                         val targetFile = File(item.absolutePath)
-                        if (FileHelper.isValidTextFile(targetFile)) {
+                        if (FileHelper.isPdfFile(targetFile)) {
+                            selectedPdfPath = targetFile.absolutePath
+                            pdfPageOffset = 0
+                            widgetMode = UnifiedWidgetMode.PDF_VIEWER
+                            coroutineScope.launch {
+                                syncStateToPinnedWidgets(
+                                    context = context,
+                                    mode = UnifiedWidgetMode.PDF_VIEWER,
+                                    currentPath = currentPath,
+                                    selectedImagePath = selectedImagePath,
+                                    selectedTextPath = selectedTextPath,
+                                    selectedPdfPath = targetFile.absolutePath,
+                                    pdfPageOffset = 0,
+                                    scaleMode = imageScaleMode
+                                )
+                            }
+                        } else if (FileHelper.isValidTextFile(targetFile)) {
                             selectedTextPath = targetFile.absolutePath
                             widgetMode = UnifiedWidgetMode.TEXT_VIEWER
                             coroutineScope.launch {
@@ -423,11 +453,28 @@ fun ComicCompanionAndPreviewScreen() {
                                     currentPath = currentPath,
                                     selectedImagePath = selectedImagePath,
                                     selectedTextPath = targetFile.absolutePath,
+                                    selectedPdfPath = selectedPdfPath,
+                                    pdfPageOffset = pdfPageOffset,
                                     scaleMode = imageScaleMode
                                 )
                             }
                         } else {
                             FileHelper.openFileExternally(context, targetFile)
+                        }
+                    },
+                    onChangePdfPageOffset = { newOffset ->
+                        pdfPageOffset = newOffset.coerceAtLeast(0)
+                        coroutineScope.launch {
+                            syncStateToPinnedWidgets(
+                                context = context,
+                                mode = UnifiedWidgetMode.PDF_VIEWER,
+                                currentPath = currentPath,
+                                selectedImagePath = selectedImagePath,
+                                selectedTextPath = selectedTextPath,
+                                selectedPdfPath = selectedPdfPath,
+                                pdfPageOffset = pdfPageOffset,
+                                scaleMode = imageScaleMode
+                            )
                         }
                     },
                     onOpenWithFilePicker = { filePath ->
@@ -455,6 +502,8 @@ private fun ComicWidgetInteractivePreviewSection(
     showHidden: Boolean,
     selectedImagePath: String?,
     selectedTextPath: String?,
+    selectedPdfPath: String?,
+    pdfPageOffset: Int,
     imageScaleMode: WidgetImageScaleMode,
     directoryResult: DirectoryLoadResult,
     onNavigateFolder: (String) -> Unit,
@@ -467,6 +516,7 @@ private fun ComicWidgetInteractivePreviewSection(
     onToggleImageScaleMode: () -> Unit,
     onLaunchFullscreenImage: (String) -> Unit,
     onOpenNonImageFile: (FileBrowserItem) -> Unit,
+    onChangePdfPageOffset: (Int) -> Unit,
     onOpenWithFilePicker: (String) -> Unit,
     onGrantPermission: () -> Unit
 ) {
@@ -513,6 +563,14 @@ private fun ComicWidgetInteractivePreviewSection(
                     onBackToBrowser = onReturnToBrowser,
                     onToggleScaleMode = onToggleImageScaleMode,
                     onTapImageFullscreen = { onLaunchFullscreenImage(selectedImagePath) }
+                )
+            } else if (mode == UnifiedWidgetMode.PDF_VIEWER && !selectedPdfPath.isNullOrBlank()) {
+                InAppComicPdfViewerMode(
+                    pdfPath = selectedPdfPath,
+                    pageOffset = pdfPageOffset,
+                    onBackToBrowser = onReturnToBrowser,
+                    onChangePageOffset = onChangePdfPageOffset,
+                    onOpenWithFilePicker = { onOpenWithFilePicker(selectedPdfPath) }
                 )
             } else if (mode == UnifiedWidgetMode.TEXT_VIEWER && !selectedTextPath.isNullOrBlank()) {
                 InAppComicTextViewerMode(
@@ -1320,12 +1378,310 @@ private fun InAppComicTextViewerMode(
     }
 }
 
+/**
+ * In-app `PDF_VIEWER` mode inside the widget preview box:
+ * - Left: Back icon button (`ic_comic_back`) to return immediately to `BROWSER` mode in the exact same folder.
+ * - Center: PDF file name on top + folder path below.
+ * - Right: `PDF` format badge.
+ * - Body:
+ *   - Enforces the `10 MB` preview limit; if exceeded, displays an "OPEN WITH FILE PICKER" button.
+ *   - Renders a vertically scrollable list (`LazyColumn`) of crisp PDF pages via [FileHelper.loadPdfForPreview].
+ */
+@Composable
+private fun InAppComicPdfViewerMode(
+    pdfPath: String,
+    pageOffset: Int,
+    onBackToBrowser: () -> Unit,
+    onChangePageOffset: (Int) -> Unit,
+    onOpenWithFilePicker: () -> Unit
+) {
+    val file = remember(pdfPath) { File(pdfPath) }
+    val parentFolderPath = remember(pdfPath) {
+        file.parentFile?.absolutePath ?: FileHelper.getRootStoragePath()
+    }
+    val truncatedPath = remember(parentFolderPath) {
+        FileHelper.getTruncatedDisplayPath(parentFolderPath)
+    }
+    val loadResult = remember(pdfPath, pageOffset) {
+        FileHelper.loadPdfForPreview(
+            filePath = pdfPath,
+            startPage = pageOffset,
+            maxPages = FileHelper.MAX_IN_APP_PDF_PAGES_PER_BATCH,
+            targetWidthPx = 760
+        )
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("in_app_pdf_viewer_mode"),
+        verticalArrangement = Arrangement.spacedBy(10.dp)
+    ) {
+        // Divided Comic Panel PDF Viewer Header Bar:
+        // [Back Icon] | PDF Name + Path | [PDF Badge]
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp)
+                .border(2.dp, ComicBlack)
+                .background(ComicPanelGray),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .width(50.dp)
+                    .fillMaxHeight()
+                    .background(ComicWhite)
+                    .clickable(onClick = onBackToBrowser)
+                    .testTag("pdf_viewer_back_button"),
+                contentAlignment = Alignment.Center
+            ) {
+                Image(
+                    painter = painterResource(id = R.drawable.ic_comic_back),
+                    contentDescription = "Back to folder",
+                    modifier = Modifier.size(20.dp)
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .width(1.5.dp)
+                    .fillMaxHeight()
+                    .background(ComicBlack)
+            )
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 10.dp),
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text(
+                    text = file.name.ifBlank { "DOCUMENT.PDF" },
+                    style = MaterialTheme.typography.titleMedium,
+                    color = ComicBlack,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.testTag("pdf_viewer_title")
+                )
+                Text(
+                    text = truncatedPath,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = ComicMutedInk,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.testTag("pdf_viewer_path")
+                )
+            }
+
+            Box(
+                modifier = Modifier
+                    .width(2.dp)
+                    .fillMaxHeight()
+                    .background(ComicBlack)
+            )
+
+            Box(
+                modifier = Modifier
+                    .width(54.dp)
+                    .fillMaxHeight()
+                    .background(ComicWhite)
+                    .padding(horizontal = 6.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .background(ComicBlack)
+                        .padding(horizontal = 6.dp, vertical = 3.dp)
+                ) {
+                    Text(
+                        text = FileHelper.getFileFormatBadge(file),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = ComicWhite
+                    )
+                }
+            }
+        }
+
+        // Scrollable PDF Pages Box
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .heightIn(min = 280.dp, max = 480.dp)
+                .comicPanelFrame(backgroundColor = ComicWhite, borderColor = ComicBlack)
+                .testTag("pdf_viewer_content_box")
+        ) {
+            when (loadResult) {
+                is PdfFileLoadResult.TooLargeForPreview -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 36.dp, horizontal = 18.dp)
+                            .testTag("pdf_viewer_too_large_state"),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Text(
+                            text = "FILE EXCEEDS 10 MB LIMIT",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = ComicBlack,
+                            textAlign = TextAlign.Center
+                        )
+                        Text(
+                            text = "${loadResult.fileName} (${loadResult.formattedSize} > 10.0 MB max preview size)",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ComicMutedInk,
+                            textAlign = TextAlign.Center
+                        )
+                        Spacer(modifier = Modifier.height(4.dp))
+                        Box(
+                            modifier = Modifier
+                                .comicPanelFrame(backgroundColor = ComicBlack, borderColor = ComicBlack)
+                                .clickable(onClick = onOpenWithFilePicker)
+                                .padding(horizontal = 16.dp, vertical = 10.dp)
+                                .testTag("pdf_open_with_file_picker_button")
+                        ) {
+                            Text(
+                                text = "OPEN WITH FILE PICKER",
+                                style = MaterialTheme.typography.labelLarge,
+                                color = ComicWhite
+                            )
+                        }
+                    }
+                }
+
+                is PdfFileLoadResult.Unreadable -> {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(vertical = 32.dp, horizontal = 16.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Text(
+                            text = "CANNOT READ PDF",
+                            style = MaterialTheme.typography.titleMedium,
+                            color = ComicBlack
+                        )
+                        Text(
+                            text = loadResult.reason,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = ComicMutedInk,
+                            textAlign = TextAlign.Center
+                        )
+                    }
+                }
+
+                is PdfFileLoadResult.Success -> {
+                    val hasMoreBatches = loadResult.totalPages > FileHelper.MAX_IN_APP_PDF_PAGES_PER_BATCH
+                    val canPrevBatch = loadResult.startPageIndex > 0
+                    val canNextBatch = loadResult.endPageExclusive < loadResult.totalPages
+
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        if (hasMoreBatches) {
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .background(ComicPanelGray)
+                                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                                horizontalArrangement = Arrangement.SpaceBetween,
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .background(if (canPrevBatch) ComicBlack else ComicMutedInk.copy(alpha = 0.35f))
+                                        .clickable(enabled = canPrevBatch) {
+                                            onChangePageOffset(
+                                                (loadResult.startPageIndex - FileHelper.MAX_IN_APP_PDF_PAGES_PER_BATCH).coerceAtLeast(0)
+                                            )
+                                        }
+                                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = "← PREV",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = ComicWhite
+                                    )
+                                }
+
+                                Text(
+                                    text = "PAGES ${loadResult.startPageIndex + 1}–${loadResult.endPageExclusive} OF ${loadResult.totalPages}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = ComicBlack
+                                )
+
+                                Box(
+                                    modifier = Modifier
+                                        .background(if (canNextBatch) ComicBlack else ComicMutedInk.copy(alpha = 0.35f))
+                                        .clickable(enabled = canNextBatch) {
+                                            onChangePageOffset(loadResult.endPageExclusive)
+                                        }
+                                        .padding(horizontal = 10.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = "NEXT →",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = ComicWhite
+                                    )
+                                }
+                            }
+                        }
+
+                        LazyColumn(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp)
+                                .testTag("pdf_pages_lazy_column"),
+                            contentPadding = PaddingValues(vertical = 10.dp),
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
+                        ) {
+                            items(
+                                items = loadResult.pages,
+                                key = { it.pageNumber }
+                            ) { renderedPage ->
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .comicPanelFrame(backgroundColor = ComicWhite, borderColor = ComicBlack)
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .background(ComicBlack)
+                                            .padding(horizontal = 10.dp, vertical = 4.dp)
+                                    ) {
+                                        Text(
+                                            text = "PAGE ${renderedPage.pageNumber} OF ${renderedPage.totalPages}",
+                                            style = MaterialTheme.typography.labelSmall,
+                                            color = ComicWhite
+                                        )
+                                    }
+                                    Image(
+                                        bitmap = renderedPage.bitmap.asImageBitmap(),
+                                        contentDescription = "Page ${renderedPage.pageNumber}",
+                                        contentScale = ContentScale.FillWidth,
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .padding(4.dp)
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 private suspend fun syncStateToPinnedWidgets(
     context: android.content.Context,
     mode: UnifiedWidgetMode,
     currentPath: String,
     selectedImagePath: String?,
     selectedTextPath: String?,
+    selectedPdfPath: String? = null,
+    pdfPageOffset: Int = 0,
     scaleMode: WidgetImageScaleMode
 ) {
     val manager = GlanceAppWidgetManager(context)
@@ -1345,6 +1701,10 @@ private suspend fun syncStateToPinnedWidgets(
                 if (!selectedTextPath.isNullOrBlank()) {
                     this[WidgetPreferenceKeys.SELECTED_TEXT_PATH] = selectedTextPath
                 }
+                if (!selectedPdfPath.isNullOrBlank()) {
+                    this[WidgetPreferenceKeys.SELECTED_PDF_PATH] = selectedPdfPath
+                }
+                this[WidgetPreferenceKeys.PDF_PAGE_OFFSET] = pdfPageOffset
                 this[WidgetPreferenceKeys.IMAGE_SCALE_MODE] = scaleMode.storageKey
                 this[WidgetPreferenceKeys.REFRESH_TIMESTAMP] = System.currentTimeMillis()
             }

@@ -13,10 +13,13 @@ import android.graphics.Matrix
 import android.graphics.Paint
 import android.graphics.RectF
 import android.graphics.Typeface
+import android.graphics.pdf.PdfDocument
+import android.graphics.pdf.PdfRenderer
 import android.media.ExifInterface
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.ParcelFileDescriptor
 import android.provider.Settings
 import android.webkit.MimeTypeMap
 import android.widget.Toast
@@ -64,12 +67,49 @@ data class FileBrowserItem(
     val isImage: Boolean,
     val isText: Boolean,
     val isMarkdown: Boolean,
+    val isPdf: Boolean = false,
     val sizeBytes: Long,
     val lastModified: Long,
     val childCount: Int,
     val category: FileCategory,
     val formattedSubtitle: String
 )
+
+/**
+ * Represents a single rendered page of a `.pdf` document for scrollable display.
+ */
+data class PdfRenderedPage(
+    val pageNumber: Int,
+    val totalPages: Int,
+    val bitmap: Bitmap
+)
+
+/**
+ * Sealed result representing the outcome of loading a `.pdf` file for the in-widget /
+ * in-app PDF viewer (enforcing a strict `10 MB` preview limit).
+ */
+sealed interface PdfFileLoadResult {
+    data class Success(
+        val fileName: String,
+        val fullPath: String,
+        val totalPages: Int,
+        val startPageIndex: Int,
+        val endPageExclusive: Int,
+        val pages: List<PdfRenderedPage>
+    ) : PdfFileLoadResult
+
+    data class TooLargeForPreview(
+        val fileName: String,
+        val fullPath: String,
+        val fileSizeBytes: Long,
+        val formattedSize: String
+    ) : PdfFileLoadResult
+
+    data class Unreadable(
+        val fileName: String,
+        val reason: String
+    ) : PdfFileLoadResult
+}
 
 /**
  * Sealed result representing the outcome of loading a text or `.md` file for the in-widget /
@@ -134,6 +174,9 @@ object FileHelper {
     const val MAX_WIDGET_ITEMS = 80
     const val MAX_WIDGET_BITMAP_DIMENSION = 1080
     const val MAX_TEXT_PREVIEW_BYTES = 1_048_576L // 1 MB (1024 * 1024 bytes)
+    const val MAX_PDF_PREVIEW_BYTES = 10L * 1024L * 1024L // 10 MB (10 * 1024 * 1024 bytes)
+    const val MAX_GLANCE_PDF_PAGES_PER_BATCH = 5
+    const val MAX_IN_APP_PDF_PAGES_PER_BATCH = 15
     private const val MAX_GLANCE_TEXT_CHUNKS = 120
     private const val MAX_GLANCE_MARKDOWN_BLOCKS = 140
 
@@ -300,6 +343,15 @@ object FileHelper {
     }
 
     /**
+     * Checks whether [file] is a `.pdf` document that should open inside the scrollable
+     * PDF viewer (with a 10 MB limit).
+     */
+    fun isPdfFile(file: File): Boolean {
+        if (file.isDirectory) return false
+        return file.extension.equals("pdf", ignoreCase = true)
+    }
+
+    /**
      * Determines whether [file] is a valid text file (such as `.txt`, `.md`, `.java`, `.c`, `.kt`,
      * `.py`, `.json`, `.xml`, `.log`, or extensionless text files) by checking its extension and
      * inspecting the leading bytes of the file to reject binary content.
@@ -446,6 +498,117 @@ object FileHelper {
     }
 
     /**
+     * Loads and renders pages from a `.pdf` file at [filePath] using Android's native [PdfRenderer].
+     * Enforces the `10 MB` ([MAX_PDF_PREVIEW_BYTES]) limit; files above 10 MB return
+     * [PdfFileLoadResult.TooLargeForPreview] so the UI can offer the system file/app picker.
+     */
+    fun loadPdfForPreview(
+        filePath: String?,
+        startPage: Int = 0,
+        maxPages: Int = MAX_GLANCE_PDF_PAGES_PER_BATCH,
+        targetWidthPx: Int = 540
+    ): PdfFileLoadResult {
+        if (filePath.isNullOrBlank()) {
+            return PdfFileLoadResult.Unreadable(
+                fileName = "Document.pdf",
+                reason = "No PDF file path specified."
+            )
+        }
+        val file = File(filePath)
+        if (!file.exists() || !file.isFile || !file.canRead()) {
+            return PdfFileLoadResult.Unreadable(
+                fileName = file.name.ifBlank { "Document.pdf" },
+                reason = "PDF file does not exist or cannot be read."
+            )
+        }
+
+        val sizeBytes = file.length()
+        if (sizeBytes > MAX_PDF_PREVIEW_BYTES) {
+            return PdfFileLoadResult.TooLargeForPreview(
+                fileName = file.name,
+                fullPath = file.absolutePath,
+                fileSizeBytes = sizeBytes,
+                formattedSize = formatFileSize(sizeBytes)
+            )
+        }
+
+        return try {
+            ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                PdfRenderer(pfd).use { renderer ->
+                    val totalPages = renderer.pageCount
+                    if (totalPages <= 0) {
+                        return PdfFileLoadResult.Unreadable(
+                            fileName = file.name,
+                            reason = "PDF contains no pages."
+                        )
+                    }
+
+                    val safeStart = startPage.coerceIn(0, (totalPages - 1).coerceAtLeast(0))
+                    val safeEnd = (safeStart + maxPages.coerceAtLeast(1)).coerceAtMost(totalPages)
+                    val renderedPages = ArrayList<PdfRenderedPage>(safeEnd - safeStart)
+
+                    for (pageIdx in safeStart until safeEnd) {
+                        renderer.openPage(pageIdx).use { page ->
+                            val rawW = page.width.coerceAtLeast(1)
+                            val rawH = page.height.coerceAtLeast(1)
+                            val bmpW = targetWidthPx.coerceIn(280, 960)
+                            val bmpH = ((rawH.toFloat() / rawW.toFloat()) * bmpW)
+                                .roundToInt()
+                                .coerceIn(200, 1280)
+
+                            val argbBitmap = Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.ARGB_8888)
+                            val canvas = Canvas(argbBitmap)
+                            canvas.drawColor(Color.WHITE)
+
+                            page.render(
+                                argbBitmap,
+                                null,
+                                null,
+                                PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY
+                            )
+
+                            // Convert to RGB_565 (opaque white-backed page) to halve RemoteViews Binder memory
+                            val compactBitmap = argbBitmap.copy(Bitmap.Config.RGB_565, false) ?: argbBitmap
+                            if (compactBitmap !== argbBitmap) {
+                                argbBitmap.recycle()
+                            }
+
+                            renderedPages.add(
+                                PdfRenderedPage(
+                                    pageNumber = pageIdx + 1,
+                                    totalPages = totalPages,
+                                    bitmap = compactBitmap
+                                )
+                            )
+                        }
+                    }
+
+                    PdfFileLoadResult.Success(
+                        fileName = file.name,
+                        fullPath = file.absolutePath,
+                        totalPages = totalPages,
+                        startPageIndex = safeStart,
+                        endPageExclusive = safeEnd,
+                        pages = renderedPages
+                    )
+                }
+            }
+        } catch (_: OutOfMemoryError) {
+            PdfFileLoadResult.TooLargeForPreview(
+                fileName = file.name,
+                fullPath = file.absolutePath,
+                fileSizeBytes = sizeBytes,
+                formattedSize = formatFileSize(sizeBytes)
+            )
+        } catch (e: Exception) {
+            PdfFileLoadResult.Unreadable(
+                fileName = file.name,
+                reason = e.localizedMessage ?: "Unable to render PDF document."
+            )
+        }
+    }
+
+    /**
      * Lists and sorts the contents of [targetPath]:
      * - Folders first (alphabetically, case-insensitive)
      * - Files second (alphabetically, case-insensitive)
@@ -513,8 +676,9 @@ object FileHelper {
             .map { file ->
                 val isDir = file.isDirectory
                 val isImg = isImageFile(file)
+                val isPdf = isPdfFile(file)
                 val isMd = isMarkdownFile(file)
-                val isTxt = !isDir && !isImg && (isMd || isValidTextFile(file))
+                val isTxt = !isDir && !isImg && !isPdf && (isMd || isValidTextFile(file))
                 val childCount = if (isDir) {
                     try {
                         file.list()?.count { showHidden || !it.startsWith(".") } ?: 0
@@ -544,6 +708,7 @@ object FileHelper {
                     isImage = isImg,
                     isText = isTxt,
                     isMarkdown = isMd,
+                    isPdf = isPdf,
                     sizeBytes = sizeBytes,
                     lastModified = modified,
                     childCount = childCount,
@@ -1315,6 +1480,100 @@ object FileHelper {
                         "}\n"
                 )
             }
+
+            val pdfSample = File(root, "Documents/Comic_Handbook.pdf")
+            if (!pdfSample.exists()) {
+                pdfSample.parentFile?.mkdirs()
+                createSampleComicPdf(pdfSample)
+            }
+        }
+    }
+
+    private fun createSampleComicPdf(targetFile: File) {
+        val pdfDocument = PdfDocument()
+        try {
+            val pageTitles = listOf(
+                "PAGE 1: COMIC PDF VIEWER OVERVIEW",
+                "PAGE 2: SCROLLABLE MULTI-PAGE LAYOUT",
+                "PAGE 3: 10 MB SIZE LIMIT & FILE PICKER"
+            )
+            val pageBodies = listOf(
+                listOf(
+                    "Welcome to the built-in Comic Panel PDF Reader!",
+                    "• Scroll vertically through rendered PDF pages.",
+                    "• Works inside both the Home Screen Widget and App Preview.",
+                    "• Supports any standard PDF up to 10 MB in size."
+                ),
+                listOf(
+                    "Smooth Multi-Page Rendering:",
+                    "• Each page is rendered with Android's PdfRenderer.",
+                    "• Framed in sharp 2dp monochrome Comic Panel borders.",
+                    "• Includes clear PAGE X OF Y indicators."
+                ),
+                listOf(
+                    "Smart Size Limit Protection:",
+                    "• PDFs up to 10 MB render directly in the scrollable list.",
+                    "• PDFs larger than 10 MB display a one-tap button",
+                    "  to open the document in your external PDF app picker."
+                )
+            )
+
+            for (i in pageTitles.indices) {
+                val pageInfo = PdfDocument.PageInfo.Builder(595, 420, i + 1).create()
+                val page = pdfDocument.startPage(pageInfo)
+                val canvas = page.canvas
+
+                val whitePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
+                val blackPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.BLACK }
+                val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.BLACK
+                    style = Paint.Style.STROKE
+                    strokeWidth = 6f
+                }
+
+                canvas.drawRect(0f, 0f, 595f, 420f, whitePaint)
+                canvas.drawRect(18f, 18f, 577f, 402f, borderPaint)
+
+                // Header banner
+                canvas.drawRect(36f, 36f, 559f, 90f, blackPaint)
+                val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.WHITE
+                    textSize = 20f
+                    typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+                }
+                canvas.drawText(pageTitles[i], 52f, 70f, titlePaint)
+
+                val bodyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.BLACK
+                    textSize = 17f
+                    typeface = Typeface.create(Typeface.SERIF, Typeface.NORMAL)
+                }
+                var y = 145f
+                for (line in pageBodies[i]) {
+                    canvas.drawText(line, 48f, y, bodyPaint)
+                    y += 42f
+                }
+
+                val footerPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = Color.DKGRAY
+                    textSize = 14f
+                    typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+                }
+                canvas.drawText(
+                    "GLANCE FILES • COMIC PANEL PDF • PAGE ${i + 1} OF ${pageTitles.size}",
+                    48f,
+                    372f,
+                    footerPaint
+                )
+
+                pdfDocument.finishPage(page)
+            }
+
+            FileOutputStream(targetFile).use { out ->
+                pdfDocument.writeTo(out)
+            }
+        } finally {
+            pdfDocument.close()
         }
     }
 
